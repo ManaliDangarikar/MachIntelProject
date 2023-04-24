@@ -57,13 +57,25 @@ class Loss(tf.keras.losses.Loss):
         return loss
 	
 def compute_accuracy(y_true, y_pred):
-    correct_prediction = tf.equal(tf.argmax(y_pred, axis=1), tf.argmax(y_true, axis=1))
+    correct_prediction = tf.equal(tf.argmax(y_pred, axis=-1), tf.argmax(y_true, axis=-1))
     accuracy = tf.reduce_mean(tf.cast(correct_prediction, tf.float32))
     return accuracy
 
+# Example code
+class MyModel(tf.keras.Model):
+    def __init__(self):
+        super(MyModel, self).__init__()
+        self.neural_layer = NeuralLayer(units=784, activation='relu')
+        self.softmax_layer = SoftmaxLayer(num_classes=10)
+
+    def call(self, inputs):
+        x = self.neural_layer(inputs)
+        x = self.softmax_layer(x)
+        return x
+
 # -------------------------------------------------------------------------------------
 # Load MNIST dataset
-(x_train, y_train), (_, _) = tf.keras.datasets.mnist.load_data()
+(x_train, y_train), (x_test, y_test) = tf.keras.datasets.mnist.load_data()
 
 x_train = tf.cast(x_train, tf.float32)
 y_train = tf.cast(y_train, tf.float32)
@@ -72,6 +84,14 @@ x_train /= 255.0
 
 # Flatten the input data
 x_train = tf.reshape(x_train, shape=(-1, 784))
+
+x_test = tf.cast(x_test, tf.float32)
+y_test = tf.cast(y_test, tf.float32)
+
+x_test /= 255.0
+
+# Flatten the input data
+x_test = tf.reshape(x_test, shape=(-1, 784))
 
 # Create a tf.data.Dataset from the training data
 train_dataset = tf.data.Dataset.from_tensor_slices((x_train, y_train))
@@ -89,14 +109,14 @@ train_iterator = iter(train_dataset)
 # -------------------------------------------------------------------------------------
 
 # Create a NeuralLayer instance
-neural_layer = NeuralLayer(units=784, activation='relu')
+# neural_layer = NeuralLayer(units=784, activation='relu')
 
-a = neural_layer(x_train)
+# a = neural_layer(x_train)
 
 # Create a SoftmaxLayer instance
-softmax_layer = SoftmaxLayer(num_classes=10)
+# softmax_layer = SoftmaxLayer(num_classes=10)
 
-y_pred = softmax_layer(a)
+# y_pred = softmax_layer(a)
 
 # Create a Loss instance
 sparsity_constraint = 0
@@ -104,45 +124,60 @@ loss_fn = Loss(sparsity_constraint)
 
 adam = Adam(learning_rate=1e-3)
 
-sparsity_constraints = [0, 1e-4, 5e-4, 1e-3, 2.7e-3]
 
+
+model = MyModel()
+model.compile(optimizer=adam, loss=loss_fn)
 # Create a function for the training loop
 @tf.function
-def train_step(batch_x, batch_y):
+def train_step(batch_x, batch_y, sc):
+
     with tf.GradientTape() as tape:
-        y_pred = model(batch_x)  # Replace with your model's forward pass
+	    # a = neural_layer(batch_x)
+	    # y_pred = softmax_layer(a)
+        y_pred = model(batch_x, training=True)  # Replace with your model's forward pass
+        # Convert batch_y to integer data type
+        batch_y = tf.cast(batch_y, dtype=tf.int32)
+        # Convert batch_y to one-hot encoding with the same number of classes as y_pred
+        batch_y_onehot = tf.one_hot(batch_y, depth=y_pred.shape[-1])
+        batch_y_onehot = tf.cast(batch_y_onehot, dtype=y_pred.dtype)
+        # Convert y_pred to class labels and cast to the same data type as y_true
+        y_pred_labels = tf.cast(tf.argmax(y_pred, axis=-1), dtype=batch_y.dtype)
+        
         # Compute loss
-        loss = loss_fn(batch_y, y_pred, sparsity_constraint=sc)  # Call your custom loss function
+        loss_fn = Loss(sc)
+        loss = loss_fn(batch_y_onehot, y_pred)  # Call your custom loss function
 
         # Compute gradients
         gradients = tape.gradient(loss, model.trainable_variables)
 
         # Update model weights
         adam.apply_gradients(zip(gradients, model.trainable_variables))
+        #current_loss = tf.reduce_mean(loss)  # Or tf.reduce_mean(loss)
+        #current_loss = tf.constant(current_loss, dtype=tf.float32)
+        #current_loss_var = tf.Variable(loss, dtype=tf.float32, trainable=False)
+        return loss
 
-        current_loss = tf.constant(loss, dtype=tf.float32)
-
-
-
+sparsity_constraints = [0, 1e-4, 5e-4, 1e-3, 2.7e-3]
 # Iterate over different sparsity constraints
 for sc in sparsity_constraints:
     result_folder = 'E:/Sem1/MachineIntelligence/Project/project' + '/results/' + str(int(time.time())) + '-fc-sc' + str(sc)
-    with tf.compat.v1.Session() as sess:  # Note the change from tf.Session() to tf.compat.v1.Session()
-        sess.run(tf.compat.v1.global_variables_initializer())  # Note the change from tf.global_variables_initializer() to tf.compat.v1.global_variables_initializer()
-        sw = tf.summary.create_file_writer(result_folder)  # Note the change from tf.summary.FileWriter() to tf.summary.create_file_writer()
-
+    # with tf.compat.v1.Session() as sess:  # Note the change from tf.Session() to tf.compat.v1.Session()
+        # sess.run(tf.compat.v1.global_variables_initializer())  # Note the change from tf.global_variables_initializer() to tf.compat.v1.global_variables_initializer()
+        # sw = tf.summary.create_file_writer(result_folder)  # Note the change from tf.summary.FileWriter() to tf.summary.create_file_writer()
+    i=0
     for batch in train_iterator:
         # Extract batch_x and batch_y from the batch
         batch_x, batch_y = batch
-        train_step(batch_x, batch_y)
-			
-    with sw.as_default():
-        tf.summary.scalar('loss', current_loss, step=i + 1)
+        i = i + 1
+        current_loss = train_step(batch_x, batch_y, sc)	
+    #with sw.as_default():
+     #   tf.summary.scalar('loss', current_loss, step=i + 1)
 
-    if (i + 1) % 100 == 0:
+    #if (i + 1) % 100 == 0:
         # Evaluate accuracy on test set
         y_pred_test = model(x_test)
-        acc = accuracy(y_test, y_pred_test)  # Replace with your accuracy calculation function
-        tf.summary.scalar('accuracy', acc, step=i + 1)
-        print('batch: %d, loss: %f, accuracy: %f' % (i + 1, current_loss, acc))
+        acc = compute_accuracy(y_test, y_pred_test)  # Replace with your accuracy calculation function
+        #tf.summary.scalar('accuracy', acc, step=i + 1)
+        print('batch: %d, loss: %f, accuracy: %f' % (i , current_loss, acc))
  
